@@ -11,3 +11,4 @@ services:
     environment:
       - ADMIN_PASSWORD=admin      # Web UI password
       - DATA_DIR=/app/data
+      - TZ=Asia/Shanghai

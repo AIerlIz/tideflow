@@ -42,5 +42,6 @@ COPY app/templates/ /app/templates/
 EXPOSE 8000
 
 ENV DATA_DIR=/app/data
+ENV TZ=Asia/Shanghai
 
 ENTRYPOINT ["/tideflow"]

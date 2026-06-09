@@ -27,6 +27,15 @@ var DefaultSettings = map[string]string{
 	"poll_interval":          "2",
 }
 
+// Timezone is read from the TZ env var (default "Asia/Shanghai").
+func Timezone() string {
+	tz := os.Getenv("TZ")
+	if tz == "" {
+		return "Asia/Shanghai"
+	}
+	return tz
+}
+
 // AdminPassword is read from the ADMIN_PASSWORD env var (default "admin").
 func AdminPassword() string {
 	pw := os.Getenv("ADMIN_PASSWORD")
