@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>TideFlow</title>
+    <link href="/static/css/app.css" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+    <!-- 顶栏 -->
+    <div class="topbar">
+        <div class="dot" :class="dotClass"></div>
+        <div class="logo">🌊 <span>TideFlow</span></div>
+        <div class="spacer"></div>
+        <span style="font-size:0.7rem;color:#64748b" v-if="stats.window_enabled">🕐 {{ stats.window_start }}→{{ stats.window_end }}</span>
+        <button class="btn btn-pause" @click="act('pause')" title="暂停">⏸</button>
+        <button class="btn btn-resume" @click="act('resume')" title="恢复">▶</button>
+        <button class="btn btn-ghost" @click="act('clear')">清除冷却</button>
+        <button class="btn btn-ghost mobile-toggle" @click="mobileShow=!mobileShow">⚙</button>
+    </div>
+
+    <!-- 移动端遮罩 -->
+    <div class="mobile-overlay" :class="{on: mobileShow}" @click="mobileShow=false"></div>
+
+    <!-- 主布局 -->
+    <div class="layout">
+        <!-- 左: 设置 -->
+        <div class="panel-left" :class="{open: mobileShow}">
+            <div class="panel-header">
+                设置
+                <button class="btn btn-ghost btn-sm mobile-toggle" @click="mobileShow=false">✕</button>
+            </div>
+            <div class="panel-body">
+                <!-- 密码验证 -->
+                <div v-if="!unlocked" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:40px 20px">
+                    <div style="font-size:2.5rem;margin-bottom:12px">🔒</div>
+                    <div style="font-weight:700;font-size:1rem;color:#e2e8f0;margin-bottom:20px">请输入安全密码</div>
+                    <input class="form-input" type="password" v-model="pwd" @keyup.enter="tryUnlock" placeholder="密码" style="width:200px;text-align:center;margin-bottom:8px">
+                    <div v-if="pwdErr" style="color:#ef4444;font-size:0.75rem;margin-bottom:8px">密码错误</div>
+                    <button class="btn btn-primary" @click="tryUnlock" style="width:200px">验证</button>
+                </div>
+
+                <!-- 设置内容 -->
+                <template v-if="unlocked">
+                <div class="set-section">
+                    <div class="set-title">📊 流量上限</div>
+                    <label class="form-check" style="margin-bottom:8px"><input type="checkbox" v-model="s.traffic_cap_enabled" true-value="true" false-value="false" @change="save"> 启用</label>
+                    <template v-if="s.traffic_cap_enabled==='true'">
+                        <div class="form-row">
+                            <div class="form-group"><label class="form-label">上限 GB</label><input class="form-input" type="number" min="1" :value="gb(s.traffic_cap_bytes)" @change="e=>{s.traffic_cap_bytes=String(Math.round(e.target.value*1073741824));save()}"></div>
+                            <div class="form-group"><label class="form-label">周期</label><select class="form-select" v-model="s.traffic_cap_period" @change="save"><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option></select></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label class="form-label">重置时刻</label><input class="form-input" type="number" min="0" max="23" v-model="s.traffic_cap_reset_hour" @change="save"></div>
+                            <div class="form-group" v-if="s.traffic_cap_period==='monthly'"><label class="form-label">重置日期</label><input class="form-input" type="number" min="1" max="28" v-model="s.traffic_cap_reset_day" @change="save"></div>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="set-section">
+                    <div class="set-title">🕐 下载时段</div>
+                    <label class="form-check" style="margin-bottom:8px"><input type="checkbox" v-model="s.time_window_enabled" true-value="true" false-value="false" @change="save"> 启用</label>
+                    <div class="form-hint" style="margin-bottom:8px">支持跨天 · 如 23:00→03:00</div>
+                    <div class="form-row" v-if="s.time_window_enabled==='true'">
+                        <div class="form-group"><label class="form-label">开始</label><input class="form-input" type="time" v-model="s.time_window_start" @change="save"></div>
+                        <div class="form-group"><label class="form-label">结束</label><input class="form-input" type="time" v-model="s.time_window_end" @change="save"></div>
+                    </div>
+                </div>
+
+                <div class="set-section">
+                    <div class="set-title">⚡ 高级</div>
+                    <div class="form-row">
+                        <div class="form-group"><label class="form-label">并发数</label><input class="form-input" type="number" min="1" max="50" v-model="s.max_concurrent" @change="save"></div>
+                        <div class="form-group"><label class="form-label">限速 (0=不限)</label><input class="form-input" v-model="s.default_max_speed" @change="save" placeholder="如 10M"></div>
+                    </div>
+                </div>
+
+                <div v-if="confirmDel" style="background:#451a03;border:1px solid #b45309;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">
+                    <div style="font-weight:700;color:#fbbf24;margin-bottom:4px">确认删除「{{ confirmDel.name }}」？</div>
+                    <div style="font-size:0.75rem;color:#fdba74;margin-bottom:10px">此操作不可撤销</div>
+                    <div style="display:flex;gap:8px;justify-content:center">
+                        <button class="btn" style="background:#b45309;color:#fff" @click="doDel">确认删除</button>
+                        <button class="btn btn-ghost" @click="confirmDel=null">取消</button>
+                    </div>
+                </div>
+
+                <div class="set-section">
+                    <div class="set-title">🔗 下载源 ({{ sources.length }})</div>
+                    <div v-if="showForm" style="margin-bottom:8px">
+                        <input class="form-input" style="margin-bottom:4px" placeholder="名称" v-model="f.name">
+                        <input class="form-input" style="margin-bottom:6px" placeholder="HTTPS URL" v-model="f.url">
+                        <div class="form-row" style="margin-bottom:6px">
+                            <button class="btn btn-ghost btn-sm" @click="testUrl" :disabled="testing">{{ testing?'测试中…':'🔍 测试' }}</button>
+                            <button class="btn btn-primary btn-sm" @click="saveSource">保存</button>
+                        </div>
+                        <div v-if="testResult" :class="testResult.ok?'test-ok':'test-fail'">{{ testResult.ok?'✓ 可达':'✗ '+testResult.error }}</div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" @click="addSource" v-if="!showForm">+ 添加</button>
+                    <div class="src-item" v-for="src in sources" :key="src.id">
+                        <div class="si"><div class="sn">{{ src.name }}</div><div class="su">{{ src.url }}</div></div>
+                        <span class="sb" :style="src.downloading?'background:#1e3a5f;color:#38bdf8':src.in_cooldown?'background:#422006;color:#f59e0b':src.enabled?'background:#052e16;color:#22c55e':'background:#1e293b;color:#64748b'">{{ src.downloading?fmt(src.bytes):src.in_cooldown?'冷却':src.enabled?'就绪':'禁用' }}</span>
+                        <button class="btn btn-danger" @click="del(src.id)">✕</button>
+                    </div>
+                </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- 右: 仪表板 -->
+        <div class="panel-right">
+            <div class="metrics">
+                <div class="metric"><div class="val c1">{{ fmt(stats.speed) }}/s</div><div class="lbl">实时速度</div></div>
+                <div class="metric"><div class="val c2">{{ fmt(stats.traffic) }}</div><div class="lbl">周期流量</div><div class="sub" v-if="stats.cap_enabled">{{ (stats.traffic/stats.traffic_cap*100).toFixed(1) }}% · 上限 {{ fmt(stats.traffic_cap) }}</div></div>
+                <div class="metric"><div class="val c3">{{ stats.stream_count }} / {{ stats.max_concurrent }}</div><div class="lbl">活跃 / 上限</div></div>
+            </div>
+
+            <!-- 居中状态（按优先级） -->
+            <div v-if="centerState" style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center">
+                <div>
+                    <div style="font-size:3rem;margin-bottom:12px">{{ centerState.icon }}</div>
+                    <div style="font-size:1.2rem;font-weight:700;color:#e2e8f0;margin-bottom:4px">{{ centerState.title }}</div>
+                    <div style="font-size:0.9rem;color:#64748b" v-html="centerState.desc"></div>
+                    <div style="font-size:0.75rem;color:#475569;margin-top:8px" v-if="centerState.hint">{{ centerState.hint }}</div>
+                </div>
+            </div>
+
+            <div class="task-list" v-if="!centerState && streamList.length>0">
+                <div class="task" v-for="t in streamList" :key="t.id">
+                    <div class="tn">{{ t.name }}</div>
+                    <div class="tb"><div class="tbf"></div></div>
+                    <div class="tv">{{ fmt(t.bytes) }}</div>
+                </div>
+            </div>
+            <div class="idle" v-for="s in idleList" :key="'i-'+s.id"><div class="d"></div><div class="dn">{{ s.name }}</div><div class="dt">{{ s.status }}</div></div>
+
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/vue.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

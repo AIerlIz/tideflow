@@ -1,0 +1,12 @@
+services:
+  tideflow:
+    build: .
+    container_name: tideflow
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data          # SQLite 持久化
+    environment:
+      - ADMIN_PASSWORD=admin      # 设置页安全密码
