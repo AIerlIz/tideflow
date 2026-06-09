@@ -230,17 +230,30 @@ func (e *Engine) initPeriod() {
 			end = rst.Add(24 * time.Hour)
 		}
 	case "weekly":
-		// Monday of this week
-		wd := now.Weekday()
-		if wd == time.Sunday {
-			wd = 7
+		// Reset weekday: 1=Mon … 7=Sun (default Monday)
+		rw, _ := strconv.Atoi(e.getSetting("traffic_cap_reset_weekday"))
+		if rw < 1 || rw > 7 {
+			rw = 1
 		}
-		mon := now.Add(-time.Duration(wd-1) * 24 * time.Hour)
-		mon = time.Date(mon.Year(), mon.Month(), mon.Day(), rh, 0, 0, 0, now.Location())
-		if now.Before(mon) {
-			end = mon
+		// Map 1..7 (Mon..Sun) to Go's time.Weekday (0=Sun, 1..6=Mon..Sat)
+		var targetWD time.Weekday
+		if rw == 7 {
+			targetWD = time.Sunday
 		} else {
-			end = mon.Add(7 * 24 * time.Hour)
+			targetWD = time.Weekday(rw) // 1=Mon matches time.Monday
+		}
+		// Find the target day in the current week
+		nowWD := now.Weekday()
+		daysSinceTarget := int(nowWD - targetWD)
+		if daysSinceTarget < 0 {
+			daysSinceTarget += 7
+		}
+		resetDay := now.Add(-time.Duration(daysSinceTarget) * 24 * time.Hour)
+		resetDay = time.Date(resetDay.Year(), resetDay.Month(), resetDay.Day(), rh, 0, 0, 0, now.Location())
+		if now.Before(resetDay) {
+			end = resetDay
+		} else {
+			end = resetDay.Add(7 * 24 * time.Hour)
 		}
 	case "monthly":
 		thisM := time.Date(now.Year(), now.Month(), rd, rh, 0, 0, 0, now.Location())
@@ -454,6 +467,31 @@ func (e *Engine) StopAll() {
 // ---- fill slots ----
 
 func (e *Engine) fill() {
+	// Always prune excess tasks first (even when paused)
+	maxCC, _ := strconv.Atoi(e.getSetting("max_concurrent"))
+	if maxCC < 1 {
+		maxCC = 1
+	}
+	e.mu.RLock()
+	activeCount := len(e.streamCancel)
+	e.mu.RUnlock()
+	if activeCount > maxCC {
+		excess := activeCount - maxCC
+		e.mu.RLock()
+		var keys []string
+		for k := range e.streamCancel {
+			keys = append(keys, k)
+		}
+		e.mu.RUnlock()
+		for i := 0; i < excess && i < len(keys); i++ {
+			e.StopOne(keys[i])
+		}
+		// Re-read after pruning
+		e.mu.RLock()
+		activeCount = len(e.streamCancel)
+		e.mu.RUnlock()
+	}
+
 	e.mu.RLock()
 	pbc := e.pausedByCap
 	pbw := e.pausedByWindow
@@ -487,17 +525,12 @@ func (e *Engine) fill() {
 	}
 	e.CooldownIDs = cooldownIDs
 	e.AllFailed = len(sources) > 0 && len(available) == 0 && len(e.streamCancel) == 0
-	activeCount := len(e.streamCancel)
 	e.mu.Unlock()
 
 	if len(available) == 0 {
 		return
 	}
 
-	maxCC, _ := strconv.Atoi(e.getSetting("max_concurrent"))
-	if maxCC <= 0 {
-		maxCC = 3
-	}
 	need := maxCC - activeCount
 	if need <= 0 {
 		return
@@ -644,13 +677,8 @@ func (e *Engine) tick() {
 	}
 
 	// ---- fill ----
-	e.mu.RLock()
-	pbc := e.pausedByCap
-	pbw := e.pausedByWindow
-	e.mu.RUnlock()
-	if e.canDownload() && !pbc && !pbw {
-		e.fill()
-	}
+	// Always call fill() — pruning must work even when paused.
+	e.fill()
 
 	// ---- period reset ----
 	rec, _ := e.currentRecord()

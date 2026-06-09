@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"tideflow/internal/config"
@@ -41,7 +42,7 @@ func (h *SettingsHandler) HandleGetSettings(w http.ResponseWriter, r *http.Reque
 // HandleUpdateSettings bulk-updates settings.
 func (h *SettingsHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Settings map[string]string `json:"settings"`
+		Settings map[string]interface{} `json:"settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"message": "无效的请求格式", "success": false})
@@ -52,7 +53,10 @@ func (h *SettingsHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	for key, value := range body.Settings {
+	for key, val := range body.Settings {
+		// Accept any JSON type, convert to string for storage
+		value := fmt.Sprintf("%v", val)
+
 		var existing string
 		err := h.DB.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&existing)
 		if err == sql.ErrNoRows {

@@ -53,6 +53,7 @@
                         </div>
                         <div class="form-row">
                             <div class="form-group"><label class="form-label">重置时刻</label><input class="form-input" type="number" min="0" max="23" v-model="s.traffic_cap_reset_hour" @change="save"></div>
+                            <div class="form-group" v-if="s.traffic_cap_period==='weekly'"><label class="form-label">重置星期</label><select class="form-select" v-model="s.traffic_cap_reset_weekday" @change="save"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="7">周日</option></select></div>
                             <div class="form-group" v-if="s.traffic_cap_period==='monthly'"><label class="form-label">重置日期</label><input class="form-input" type="number" min="1" max="28" v-model="s.traffic_cap_reset_day" @change="save"></div>
                         </div>
                     </template>
@@ -71,7 +72,7 @@
                 <div class="set-section">
                     <div class="set-title">⚡ 高级</div>
                     <div class="form-row">
-                        <div class="form-group"><label class="form-label">并发数</label><input class="form-input" type="number" min="1" max="50" v-model="s.max_concurrent" @change="save"></div>
+                        <div class="form-group"><label class="form-label">并发数</label><input class="form-input" type="number" min="1" max="50" v-model.number="s.max_concurrent" @input="save"></div>
                         <div class="form-group"><label class="form-label">限速 (0=不限)</label><input class="form-input" v-model="s.default_max_speed" @change="save" placeholder="如 10M"></div>
                     </div>
                 </div>
