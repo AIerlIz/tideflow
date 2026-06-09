@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
     <title>TideFlow</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link href="/static/css/app.css" rel="stylesheet">
 </head>
 <body>
@@ -10,7 +11,7 @@
     <!-- 顶栏 -->
     <div class="topbar">
         <div class="dot" :class="dotClass"></div>
-        <div class="logo">🌊 <span>TideFlow</span></div>
+        <div class="logo"><img src="/static/favicon.svg" width="24" height="24" alt="" style="vertical-align:middle;margin-right:6px"><span>TideFlow</span></div>
         <div class="spacer"></div>
         <span style="font-size:0.7rem;color:#64748b" v-if="stats.window_enabled">🕐 {{ stats.window_start }}→{{ stats.window_end }}</span>
         <button class="btn btn-pause" @click="act('pause')" title="暂停">⏸</button>
