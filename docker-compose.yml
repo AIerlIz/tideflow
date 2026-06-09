@@ -1,6 +1,6 @@
 services:
   tideflow:
-    build: .
+    image: aierliz/tideflow:latest
     container_name: tideflow
     restart: unless-stopped
     network_mode: bridge
