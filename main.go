@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"os/exec"
+	"strings"
+
 	"tideflow/internal/config"
 	"tideflow/internal/database"
 	"tideflow/internal/enforcer"
@@ -19,6 +22,28 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+// Build-time variables, injected via -ldflags.
+var (
+	version   = "dev"
+	commitSHA = "unknown"
+	buildTime = "unknown"
+)
+
+func init() {
+	// Fallback: read VERSION file when not built with ldflags.
+	if version == "dev" {
+		if data, err := os.ReadFile(filepath.Join(".", "VERSION")); err == nil {
+			version = strings.TrimSpace(string(data))
+		}
+	}
+	// Fallback: try to get git commit when not built with ldflags.
+	if commitSHA == "unknown" {
+		if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
+			commitSHA = strings.TrimSpace(string(out))
+		}
+	}
+}
 
 func main() {
 	config.Init()
@@ -66,6 +91,15 @@ func main() {
 	// Health
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		handlers.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": "TideFlow"})
+	})
+
+	// Version
+	r.Get("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		handlers.WriteJSON(w, http.StatusOK, map[string]string{
+			"version": version,
+			"commit":  commitSHA,
+			"built":   buildTime,
+		})
 	})
 
 	// API routes

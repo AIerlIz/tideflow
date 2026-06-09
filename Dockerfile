@@ -1,33 +1,46 @@
+# ---- build stage ----
 FROM golang:1.25-alpine AS builder
 
-WORKDIR /build
+RUN apk add --no-cache ca-certificates tzdata
 
-# Cache dependencies
+WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
-
-# Build
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o tideflow .
 
-# ---- runtime ----
-FROM alpine:3.21
+ARG TARGETOS TARGETARCH TARGETVARIANT
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_TIME=unknown
+RUN export GOARM="" && \
+    case "${TARGETARCH}" in \
+      arm) export GOARM=${TARGETVARIANT#v} ;; \
+    esac && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w \
+      -X 'main.version=${VERSION}' \
+      -X 'main.commitSHA=${COMMIT_SHA}' \
+      -X 'main.buildTime=${BUILD_TIME}'" \
+    -o tideflow .
 
-WORKDIR /app
+# ---- runtime stage ----
+FROM scratch
 
-# Copy binary
-COPY --from=builder /build/tideflow .
+# CA certificates for HTTPS downloads
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# Copy static assets and template
-COPY app/static/ ./app/static/
-COPY app/templates/ ./app/templates/
+# Timezone data (required by Go time package)
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
-# Create data directory (SQLite persistence)
-RUN mkdir -p /app/data
+# Binary
+COPY --from=builder /build/tideflow /tideflow
+
+# Static assets and template
+COPY app/static/ /app/static/
+COPY app/templates/ /app/templates/
 
 EXPOSE 8000
 
 ENV DATA_DIR=/app/data
-ENV ADMIN_PASSWORD=admin
 
-CMD ["./tideflow"]
+ENTRYPOINT ["/tideflow"]

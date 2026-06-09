@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+.github
+
+# Data
+data
+
+# Build artifacts
+tideflow
+*.exe
+*.test
+*.out
+
+# IDE
+.idea
+.vscode
+
+# Python leftovers
+__pycache__
+*.pyc
+requirements.txt
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
