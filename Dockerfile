@@ -1,16 +1,33 @@
-FROM python:3.12-slim
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /build
+
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Build
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o tideflow .
+
+# ---- runtime ----
+FROM alpine:3.21
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy binary
+COPY --from=builder /build/tideflow .
 
-# 复制应用代码
-COPY app/ ./app/
+# Copy static assets and template
+COPY app/static/ ./app/static/
+COPY app/templates/ ./app/templates/
 
-# 数据目录（SQLite 持久化）
+# Create data directory (SQLite persistence)
 RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENV DATA_DIR=/app/data
+ENV ADMIN_PASSWORD=admin
+
+CMD ["./tideflow"]

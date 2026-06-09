@@ -1,1 +1,12 @@
+# Data
 /data
+
+# Go
+/tideflow
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
