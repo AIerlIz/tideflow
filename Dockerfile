@@ -8,15 +8,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-ARG TARGETOS TARGETARCH TARGETVARIANT
+ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIME=unknown
-RUN export GOARM="" && \
-    case "${TARGETARCH}" in \
-      arm) export GOARM=${TARGETVARIANT#v} ;; \
-    esac && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w \
       -X 'main.version=${VERSION}' \
       -X 'main.commitSHA=${COMMIT_SHA}' \

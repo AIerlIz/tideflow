@@ -40,7 +40,7 @@ docker run -d \
   aierliz/tideflow:latest
 ```
 
-镜像支持 `amd64` / `arm64` / `arm/v7`。
+镜像支持 `amd64` / `arm64`。
 
 ## API
 
