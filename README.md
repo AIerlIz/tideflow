@@ -42,6 +42,8 @@ docker run -d \
 
 镜像支持 `amd64` / `arm64`。
 
+Docker Hub: [`aierliz/tideflow`](https://hub.docker.com/r/aierliz/tideflow)
+
 ## API
 
 | 方法 | 路径 | 说明 |
@@ -98,8 +100,10 @@ go build -ldflags="-s -w \
 main.go                     # 入口，路由注册
 internal/
 ├── config/config.go        # 配置常量
-├── database/database.go    # SQLite 初始化
-├── models/models.go        # 数据模型
+├── storage/                # JSON 文件存储
+│   ├── store.go            # 内存缓存 + 持久化
+│   └── models.go           # 存储层数据类型
+├── models/models.go        # API 数据模型
 ├── enforcer/enforcer.go    # 带宽消耗引擎（goroutine）
 └── handlers/               # HTTP 处理器
     ├── auth.go
