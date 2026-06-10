@@ -56,22 +56,22 @@ jobs:
 
       - name: Build binaries
         run: |
-          mkdir -p out
-          LDFLAGS="-s -w -X 'main.version=${{ steps.ver.outputs.version }}' -X 'main.commitSHA=${{ steps.ver.outputs.commit }}' -X 'main.buildTime=${{ steps.ver.outputs.build_time }}'"
+          V="${{ steps.ver.outputs.version }}"
+          LDFLAGS="-s -w -X 'main.version=${V}' -X 'main.commitSHA=${{ steps.ver.outputs.commit }}' -X 'main.buildTime=${{ steps.ver.outputs.build_time }}'"
+          mkdir -p dist
 
-          targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
-          for t in $targets; do
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             OS="${t%/*}"
             ARCH="${t#*/}"
             EXT=""
             [ "$OS" = "windows" ] && EXT=".exe"
-            NAME="tideflow-${{ steps.ver.outputs.version }}-${OS}-${ARCH}${EXT}"
-            echo "Building $NAME ..."
+            NAME="tideflow-${V}-${OS}-${ARCH}${EXT}"
+            echo "Building ${NAME} ..."
             CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" \
-              go build -ldflags="$LDFLAGS" -o "out/${NAME}" .
+              go build -ldflags="$LDFLAGS" -o "dist/${NAME}" .
           done
 
-          cd out && sha256sum * > checksums.txt
+          cd dist && sha256sum * > checksums.txt
           ls -lh
 
       - name: Create Release
@@ -79,5 +79,5 @@ jobs:
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: TideFlow v${{ steps.ver.outputs.version }}
-          files: out/*
+          files: dist/*
           generate_release_notes: true

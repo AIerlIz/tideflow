@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"embed"
 	"html/template"
+	"io/fs"
+	"path/filepath"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,6 +24,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+//go:embed app/static
+var staticFS embed.FS
+
+//go:embed app/templates/index.html
+var templateFS embed.FS
 
 // Build-time variables, injected via -ldflags.
 var (
@@ -72,13 +80,12 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Static files
-	staticDir := filepath.Join(".", "app", "static")
-	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+	// Static files (embedded)
+	staticSub, _ := fs.Sub(staticFS, "app/static")
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// Template with custom delimiters for Vue.js compatibility
-	tmplPath := filepath.Join(".", "app", "templates", "index.html")
-	tmpl := template.Must(template.New("index.html").Delims("{[{", "}]}").ParseFiles(tmplPath))
+	// Template with custom delimiters for Vue.js compatibility (embedded)
+	tmpl := template.Must(template.New("index.html").Delims("{[{", "}]}").ParseFS(templateFS, "app/templates/index.html"))
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{"request": r}); err != nil {
