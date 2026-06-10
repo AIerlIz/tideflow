@@ -33,7 +33,7 @@ func (h *SourcesHandler) ListSources(w http.ResponseWriter, r *http.Request) {
 			Enabled:    s.Enabled,
 			CreatedAt:  s.CreatedAt,
 			UpdatedAt:  s.UpdatedAt,
-		}}
+		}, TotalBytes: s.TotalBytes, MaxSpeed: s.MaxSpeed}
 
 		// Aggregate bytes and check if downloading
 		h.Engine.Mu().RLock()
@@ -104,8 +104,12 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	if body.SourceType == "" {
 		body.SourceType = "http"
 	}
+	if h.Store.URLExists(body.URL) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "该 URL 已存在"})
+		return
+	}
 
-	rec := h.Store.CreateSource(body.Name, body.URL, body.SourceType, body.Enabled)
+	rec := h.Store.CreateSource(body.Name, body.URL, body.SourceType, body.Enabled, body.Headers, body.MaxSpeed)
 	s := models.DownloadSource{
 		ID:         rec.ID,
 		Name:       rec.Name,
@@ -133,7 +137,7 @@ func (h *SourcesHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, found := h.Store.UpdateSource(sid, body.Name, body.URL, body.SourceType, body.Enabled)
+	rec, found := h.Store.UpdateSource(sid, body.Name, body.URL, body.SourceType, body.Enabled, body.Headers, body.MaxSpeed)
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "源不存在"})
 		return

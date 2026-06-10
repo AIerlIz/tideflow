@@ -61,6 +61,7 @@ func (h *StatsHandler) HandleStats(w http.ResponseWriter, r *http.Request) {
 		PausedWindow:  e.PausedByWindow,
 		CooldownIDs:   e.CooldownIDs,
 		AllFailed:     e.AllFailed,
+		AllTimeBytes:  h.Store.GetAllTimeBytes(),
 	}
 	e.Mu().RUnlock()
 

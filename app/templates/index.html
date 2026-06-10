@@ -13,7 +13,8 @@
         <div class="dot" :class="dotClass"></div>
         <div class="logo"><img src="/static/favicon.svg" width="24" height="24" alt="" style="vertical-align:middle;margin-right:6px"><span>TideFlow</span></div>
         <div class="spacer"></div>
-        <span style="font-size:0.7rem;color:#64748b" v-if="stats.window_enabled">🕐 {{ stats.window_start }}→{{ stats.window_end }}</span>
+        <span style="font-size:0.7rem;color:var(--text3)" v-if="stats.window_enabled">🕐 {{ stats.window_start }}→{{ stats.window_end }}</span>
+        <button class="btn btn-ghost btn-sm" @click="toggleDark">{{ darkOn ? '☀' : '🌙' }}</button>
         <button class="btn btn-pause" @click="act('pause')" title="暂停">⏸</button>
         <button class="btn btn-resume" @click="act('resume')" title="恢复">▶</button>
         <button class="btn btn-ghost" @click="act('clear')">清除冷却</button>
@@ -35,9 +36,9 @@
                 <!-- 密码验证 -->
                 <div v-if="!unlocked" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:40px 20px">
                     <div style="font-size:2.5rem;margin-bottom:12px">🔒</div>
-                    <div style="font-weight:700;font-size:1rem;color:#e2e8f0;margin-bottom:20px">请输入安全密码</div>
+                    <div style="font-weight:700;font-size:1rem;color:var(--text);margin-bottom:20px">请输入安全密码</div>
                     <input class="form-input" type="password" v-model="pwd" @keyup.enter="tryUnlock" placeholder="密码" style="width:200px;text-align:center;margin-bottom:8px">
-                    <div v-if="pwdErr" style="color:#ef4444;font-size:0.75rem;margin-bottom:8px">密码错误</div>
+                    <div v-if="pwdErr" style="color:var(--danger);font-size:0.75rem;margin-bottom:8px">密码错误</div>
                     <button class="btn btn-primary" @click="tryUnlock" style="width:200px">验证</button>
                 </div>
 
@@ -70,12 +71,25 @@
                 </div>
 
                 <div class="set-section">
+                    <div class="set-title">⏱ 分时段限速</div>
+                    <label class="form-check" style="margin-bottom:8px"><input type="checkbox" v-model="s.time_speed_enabled" true-value="true" false-value="false" @change="save"> 启用</label>
+                    <template v-if="s.time_speed_enabled==='true'">
+                        <div class="form-row">
+                            <div class="form-group"><label class="form-label">开始</label><input class="form-input" type="time" v-model="s.time_speed_start" @change="save"></div>
+                            <div class="form-group"><label class="form-label">结束</label><input class="form-input" type="time" v-model="s.time_speed_end" @change="save"></div>
+                        </div>
+                        <div class="form-group"><label class="form-label">限速 (如 10M)</label><input class="form-input" v-model="s.time_speed_limit" @change="save" placeholder="0=不限"></div>
+                    </template>
+                </div>
+
+                <div class="set-section">
                     <div class="set-title">⚡ 高级</div>
                     <div class="form-row">
                         <div class="form-group"><label class="form-label">并发数</label><input class="form-input" type="number" min="1" max="50" v-model.number="s.max_concurrent" @input="save"></div>
                         <div class="form-group"><label class="form-label">限速 (0=不限)</label><input class="form-input" v-model="s.default_max_speed" @change="save" placeholder="如 10M"></div>
                     </div>
                 </div>
+
 
                 <div v-if="confirmDel" style="background:#451a03;border:1px solid #b45309;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">
                     <div style="font-weight:700;color:#fbbf24;margin-bottom:4px">确认删除「{{ confirmDel.name }}」？</div>
@@ -91,6 +105,10 @@
                     <div v-if="showForm" style="margin-bottom:8px">
                         <input class="form-input" style="margin-bottom:4px" placeholder="名称" v-model="f.name">
                         <input class="form-input" style="margin-bottom:6px" placeholder="HTTPS URL" v-model="f.url">
+                        <div class="form-row" style="margin-bottom:4px">
+                            <div class="form-group"><label class="form-label">限速</label><input class="form-input" v-model="f.max_speed" placeholder="0=全局"></div>
+                            <div class="form-group"><label class="form-label">自定义 Header</label><input class="form-input" v-model="f.header_kv" placeholder="Key:Value, Key:Value"></div>
+                        </div>
                         <div class="form-row" style="margin-bottom:6px">
                             <button class="btn btn-ghost btn-sm" @click="testUrl" :disabled="testing">{{ testing?'测试中…':'🔍 测试' }}</button>
                             <button class="btn btn-primary btn-sm" @click="saveSource">保存</button>
@@ -114,14 +132,42 @@
                 <div class="metric"><div class="val c1">{{ fmt(stats.speed) }}/s</div><div class="lbl">实时速度</div></div>
                 <div class="metric"><div class="val c2">{{ fmt(stats.traffic) }}</div><div class="lbl">周期流量</div><div class="sub" v-if="stats.cap_enabled">{{ (stats.traffic/stats.traffic_cap*100).toFixed(1) }}% · 上限 {{ fmt(stats.traffic_cap) }}</div></div>
                 <div class="metric"><div class="val c3">{{ stats.stream_count }} / {{ stats.max_concurrent }}</div><div class="lbl">活跃 / 上限</div></div>
+                <div class="metric"><div class="val c4">{{ fmt(stats.all_time_bytes) }}</div><div class="lbl">累计流量</div></div>
             </div>
 
-            <!-- 居中状态（按优先级） -->
+            <!-- 流量历史图 -->
+            <div class="chart-wrap" v-if="history.length">
+                <h4>📈 流量历史 (最近 {{ history.length }} 个周期)</h4>
+                <svg :viewBox="'0 0 '+(history.length*20-4)+' 100'" class="chart-svg">
+                    <defs>
+                        <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#38bdf8"/>
+                            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <!-- 网格线 -->
+                    <line v-for="y in [25,50,75]" :x1="0" :y1="y" :x2="history.length*20" :y2="y" stroke="#334155" stroke-width="0.5"/>
+                    <!-- 填充区域 -->
+                    <path :d="chartArea" fill="url(#grad)" opacity="0.3"/>
+                    <!-- 折线 -->
+                    <polyline :points="chartLine" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linejoin="round"/>
+                    <!-- 数据点 -->
+                    <circle v-for="(p,i) in chartPoints" :cx="p.x" :cy="p.y" r="3" fill="#38bdf8" style="cursor:pointer">
+                        <title>{{ history[i]?.type }}: {{ fmt(history[i]?.bytes||0) }}</title>
+                    </circle>
+                </svg>
+                <div class="chart-labels">
+                    <span>{{ history[0]?.start?.slice(0,10) || '' }}</span>
+                    <span>{{ history[history.length-1]?.start?.slice(0,10) || '' }}</span>
+                </div>
+            </div>
+
+            <!-- 居中状态 -->
             <div v-if="centerState" style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center">
                 <div>
                     <div style="font-size:3rem;margin-bottom:12px">{{ centerState.icon }}</div>
-                    <div style="font-size:1.2rem;font-weight:700;color:#e2e8f0;margin-bottom:4px">{{ centerState.title }}</div>
-                    <div style="font-size:0.9rem;color:#64748b" v-html="centerState.desc"></div>
+                    <div style="font-size:1.2rem;font-weight:700;color:var(--text);margin-bottom:4px">{{ centerState.title }}</div>
+                    <div style="font-size:0.9rem;color:var(--text3)" v-html="centerState.desc"></div>
                     <div style="font-size:0.75rem;color:#475569;margin-top:8px" v-if="centerState.hint">{{ centerState.hint }}</div>
                 </div>
             </div>

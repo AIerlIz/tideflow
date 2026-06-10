@@ -5,13 +5,15 @@ import "time"
 // ---- Database rows ----
 
 type DownloadSource struct {
-	ID         int       `json:"id"`
-	Name       string    `json:"name"`
-	URL        string    `json:"url"`
-	SourceType string    `json:"source_type"`
-	Enabled    bool      `json:"enabled"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         int               `json:"id"`
+	Name       string            `json:"name"`
+	URL        string            `json:"url"`
+	SourceType string            `json:"source_type"`
+	Enabled    bool              `json:"enabled"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	MaxSpeed   string            `json:"max_speed,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 type GlobalSetting struct {
@@ -34,25 +36,31 @@ type TrafficRecord struct {
 // ---- API request / response ----
 
 type SourceCreate struct {
-	Name       string `json:"name"`
-	URL        string `json:"url"`
-	SourceType string `json:"source_type"`
-	Enabled    bool   `json:"enabled"`
+	Name       string            `json:"name"`
+	URL        string            `json:"url"`
+	SourceType string            `json:"source_type"`
+	Enabled    bool              `json:"enabled"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	MaxSpeed   string            `json:"max_speed,omitempty"`
 }
 
 type SourceUpdate struct {
-	Name       *string `json:"name,omitempty"`
-	URL        *string `json:"url,omitempty"`
-	SourceType *string `json:"source_type,omitempty"`
-	Enabled    *bool   `json:"enabled,omitempty"`
+	Name       *string           `json:"name,omitempty"`
+	URL        *string           `json:"url,omitempty"`
+	SourceType *string           `json:"source_type,omitempty"`
+	Enabled    *bool             `json:"enabled,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	MaxSpeed   *string           `json:"max_speed,omitempty"`
 }
 
 // SourceResponse extends DownloadSource with runtime fields.
 type SourceResponse struct {
 	DownloadSource
-	Downloading bool  `json:"downloading"`
-	Bytes       int64 `json:"bytes"`
-	InCooldown  bool  `json:"in_cooldown"`
+	Downloading bool   `json:"downloading"`
+	Bytes       int64  `json:"bytes"`
+	TotalBytes  int64  `json:"total_bytes"`
+	InCooldown  bool   `json:"in_cooldown"`
+	MaxSpeed    string `json:"max_speed,omitempty"`
 }
 
 // ---- Stats ----
@@ -74,6 +82,7 @@ type StatsResponse struct {
 	PausedWindow   bool             `json:"paused_window"`
 	CooldownIDs    []int            `json:"cooldown_ids"`
 	AllFailed      bool             `json:"all_failed"`
+	AllTimeBytes   int64            `json:"all_time_bytes"`
 }
 
 type TaskInfo struct {

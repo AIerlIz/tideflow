@@ -18,15 +18,20 @@ type trafficJSON struct {
 
 // ---- Data records ----
 
-// SourceRecord mirrors the download_sources table.
+// SourceRecord represents a single download source.
 type SourceRecord struct {
-	ID         int       `json:"id"`
-	Name       string    `json:"name"`
-	URL        string    `json:"url"`
-	SourceType string    `json:"source_type"`
-	Enabled    bool      `json:"enabled"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID            int               `json:"id"`
+	Name          string            `json:"name"`
+	URL           string            `json:"url"`
+	SourceType    string            `json:"source_type"`
+	Enabled       bool              `json:"enabled"`
+	Headers       map[string]string `json:"headers,omitempty"`        // custom HTTP headers
+	MaxSpeed      string            `json:"max_speed,omitempty"`      // per-source speed limit (0=use global)
+	FailureCount  int               `json:"failure_count,omitempty"`  // persisted failure count
+	LastFailure   *time.Time        `json:"last_failure,omitempty"`   // persisted last failure time
+	TotalBytes    int64             `json:"total_bytes,omitempty"`    // lifetime bytes downloaded from this source
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // TrafficRecord mirrors the traffic_records table.

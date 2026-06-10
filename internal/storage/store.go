@@ -48,7 +48,7 @@ func New(dataDir string) (*Store, error) {
 	// Seed default download sources on first run.
 	if len(s.sources) == 0 {
 		s.seedDefaults()
-	}
+		}
 
 	return s, nil
 }
@@ -126,7 +126,6 @@ func (s *Store) seedDefaults() {
 	s.saveSources()
 	log.Printf("Seeded %d default download sources", len(defaults))
 }
-
 func (s *Store) saveSources() {
 	if err := s.writeJSON(s.sourcesPath(), &sourcesJSON{NextID: s.nextSourceID, Items: s.sources}); err != nil {
 		log.Printf("storage: save sources: %v", err)
@@ -182,7 +181,7 @@ func (s *Store) GetSource(id int) (SourceRecord, bool) {
 }
 
 // CreateSource adds a new download source and returns it.
-func (s *Store) CreateSource(name, url, sourceType string, enabled bool) SourceRecord {
+func (s *Store) CreateSource(name, url, sourceType string, enabled bool, headers map[string]string, maxSpeed string) SourceRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -193,6 +192,8 @@ func (s *Store) CreateSource(name, url, sourceType string, enabled bool) SourceR
 		URL:        url,
 		SourceType: sourceType,
 		Enabled:    enabled,
+		Headers:    headers,
+		MaxSpeed:   maxSpeed,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -203,7 +204,7 @@ func (s *Store) CreateSource(name, url, sourceType string, enabled bool) SourceR
 
 // UpdateSource modifies an existing source. Returns the updated record
 // and true if found, or zero value and false.
-func (s *Store) UpdateSource(id int, name, url, sourceType *string, enabled *bool) (SourceRecord, bool) {
+func (s *Store) UpdateSource(id int, name, url, sourceType *string, enabled *bool, headers map[string]string, maxSpeed *string) (SourceRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.sources {
@@ -220,6 +221,12 @@ func (s *Store) UpdateSource(id int, name, url, sourceType *string, enabled *boo
 			if enabled != nil {
 				s.sources[i].Enabled = *enabled
 			}
+			if headers != nil {
+				s.sources[i].Headers = headers
+			}
+			if maxSpeed != nil {
+				s.sources[i].MaxSpeed = *maxSpeed
+			}
 			s.sources[i].UpdatedAt = time.Now()
 			rec := s.sources[i]
 			s.saveSources()
@@ -227,6 +234,85 @@ func (s *Store) UpdateSource(id int, name, url, sourceType *string, enabled *boo
 		}
 	}
 	return SourceRecord{}, false
+}
+
+// URLExists checks if a URL is already registered.
+func (s *Store) URLExists(url string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, src := range s.sources {
+		if src.URL == url {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordFailure persists a failure event for a source.
+func (s *Store) RecordFailure(sourceID int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.sources {
+		if s.sources[i].ID == sourceID {
+			s.sources[i].FailureCount++
+			s.sources[i].LastFailure = &now
+			s.saveSources()
+			return
+		}
+	}
+}
+
+// ClearFailures resets failure state for all sources.
+func (s *Store) ClearFailures() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.sources {
+		s.sources[i].FailureCount = 0
+		s.sources[i].LastFailure = nil
+	}
+	s.saveSources()
+}
+
+// AddSourceBytes accumulates bytes to both the per-source and all-time counters.
+func (s *Store) AddSourceBytes(sourceID int, bytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.sources {
+		if s.sources[i].ID == sourceID {
+			s.sources[i].TotalBytes += bytes
+			break
+		}
+	}
+	// All-time counter in settings
+	if prev, ok := s.settings["_total_bytes_all_time"]; ok {
+		var n int64
+		fmt.Sscanf(prev, "%d", &n)
+		s.settings["_total_bytes_all_time"] = fmt.Sprintf("%d", n+bytes)
+	} else {
+		s.settings["_total_bytes_all_time"] = fmt.Sprintf("%d", bytes)
+	}
+	s.saveSources()
+	s.saveSettings()
+}
+
+// GetAllTimeBytes returns the cumulative total bytes downloaded.
+func (s *Store) GetAllTimeBytes() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.settings["_total_bytes_all_time"]; ok {
+		var n int64
+		fmt.Sscanf(v, "%d", &n)
+		return n
+	}
+	return 0
+}
+
+// SetSetting persists a single setting immediately.
+func (s *Store) SetSetting(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings[key] = value
+	s.saveSettings()
 }
 
 // DeleteSource removes a source by ID. Returns true if deleted.
@@ -374,7 +460,7 @@ func (s *Store) TrafficHistory(days int) []TrafficHistoryItem {
 	defer s.mu.RUnlock()
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	var result []TrafficHistoryItem
-	for i := len(s.traffic) - 1; i >= 0; i-- {
+	for i := 0; i < len(s.traffic); i++ {
 		r := s.traffic[i]
 		if r.PeriodStart.Before(cutoff) && !r.IsCurrent {
 			continue

@@ -55,6 +55,7 @@ type Engine struct {
 
 	// failure tracker: sourceID -> entry
 	failureTracker map[int]failureEntry
+
 }
 
 // NewEngine creates an Engine bound to the given store.
@@ -88,6 +89,7 @@ func (e *Engine) ResetFailures() {
 	e.failureTracker = make(map[int]failureEntry)
 	e.CooldownIDs = nil
 	e.AllFailed = false
+	e.store.ClearFailures()
 }
 
 // FailureCount returns the number of tracked failures.
@@ -321,7 +323,7 @@ func cooldownSecs(failures int) time.Duration {
 
 // ---- stream download ----
 
-func (e *Engine) stream(ctx context.Context, taskKey string, sourceID int, url, name, limit string) {
+func (e *Engine) stream(ctx context.Context, taskKey string, sourceID int, url, name, limit string, headers map[string]string) {
 	total := int64(0)
 	defer func() {
 		e.mu.Lock()
@@ -335,23 +337,16 @@ func (e *Engine) stream(ctx context.Context, taskKey string, sourceID int, url, 
 
 	var bps int64
 	if limit != "" {
-		s := strings.ToUpper(limit)
-		switch {
-		case strings.HasSuffix(s, "M"):
-			v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "M"), 64)
-			bps = int64(v * 1048576)
-		case strings.HasSuffix(s, "K"):
-			v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "K"), 64)
-			bps = int64(v * 1024)
-		default:
-			bps, _ = strconv.ParseInt(s, 10, 64)
-		}
+		bps = e.parseSpeed(limit)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		e.recordFailure(sourceID, fmt.Errorf("create request: %w", err))
 		return
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{
@@ -438,6 +433,7 @@ func (e *Engine) stream(ctx context.Context, taskKey string, sourceID int, url, 
 done:
 	if total > 10240 {
 		e.syncTraffic()
+			e.store.AddSourceBytes(sourceID, total)
 		e.mu.Lock()
 		delete(e.failureTracker, sourceID)
 		e.mu.Unlock()
@@ -447,13 +443,31 @@ done:
 	}
 }
 
+func (e *Engine) parseSpeed(s string) int64 {
+	s = strings.ToUpper(s)
+	switch {
+	case strings.HasSuffix(s, "M"):
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "M"), 64)
+		return int64(v * 1048576)
+	case strings.HasSuffix(s, "K"):
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "K"), 64)
+		return int64(v * 1024)
+	default:
+		v, _ := strconv.ParseInt(s, 10, 64)
+		return v
+	}
+}
+
 func (e *Engine) recordFailure(sourceID int, err error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	entry := e.failureTracker[sourceID]
 	entry.failures++
 	entry.ts = time.Now()
 	e.failureTracker[sourceID] = entry
+	e.mu.Unlock()
+
+	// Persist failure state
+	e.store.RecordFailure(sourceID, time.Now())
 	log.Printf("✗ source %d (%dx): %v", sourceID, entry.failures, err)
 }
 
@@ -598,13 +612,29 @@ func (e *Engine) fill() {
 		pick = append(pick, busy[:rem]...)
 	}
 
-	speed := e.getSetting("default_max_speed")
-	if speed == "0" {
-		speed = ""
+	globalSpeed := e.getSetting("default_max_speed")
+	if globalSpeed == "0" {
+		globalSpeed = ""
+	}
+
+	// Time-based speed limit overrides global
+	if e.getSetting("time_speed_enabled") == "true" {
+		if inWindow(e.getSetting("time_speed_start"), e.getSetting("time_speed_end")) {
+			ts := e.getSetting("time_speed_limit")
+			if ts != "" && ts != "0" {
+				globalSpeed = ts
+			}
+		}
 	}
 
 	e.mu.Lock()
 	for _, s := range pick {
+		// Per-source speed overrides global
+		limit := globalSpeed
+		if s.MaxSpeed != "" && s.MaxSpeed != "0" {
+			limit = s.MaxSpeed
+		}
+
 		e.taskID++
 		key := fmt.Sprintf("%d-%d", s.ID, e.taskID)
 		log.Printf("▶ %s [%s]", s.Name, key)
@@ -612,7 +642,7 @@ func (e *Engine) fill() {
 		e.streamCancel[key] = cancel
 		e.TaskSource[key] = s.ID
 		e.StreamBytes[key] = 0
-		go e.stream(ctx, key, s.ID, s.URL, s.Name, speed)
+		go e.stream(ctx, key, s.ID, s.URL, s.Name, limit, s.Headers)
 	}
 	e.mu.Unlock()
 }
@@ -643,6 +673,12 @@ func (e *Engine) calcSpeed() {
 func (e *Engine) Run(ctx context.Context) {
 	log.Println("TideFlow enforcer started")
 	e.initPeriod()
+	// Restore persisted failure state
+	for _, src := range e.store.ListSources() {
+		if src.FailureCount > 0 && src.LastFailure != nil {
+			e.failureTracker[src.ID] = failureEntry{failures: src.FailureCount, ts: *src.LastFailure}
+		}
+	}
 
 	// Restore traffic count from store
 	if rec := e.currentRecord(); rec != nil {
