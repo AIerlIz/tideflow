@@ -4,25 +4,27 @@ on:
   push:
     branches: [main]
     paths: ['VERSION']
+    tags: ['v*']
   workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DOCKERHUB_IMAGE: aierliz/tideflow
 
 jobs:
-  release:
+  # ── 读版本号 ──────────────────────────────────
+  version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      commit: ${{ steps.ver.outputs.commit }}
+      build_time: ${{ steps.ver.outputs.build_time }}
+      tag_exists: ${{ steps.tag.outputs.exists }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
 
       - name: Read version
         id: ver
@@ -34,16 +36,14 @@ jobs:
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
           echo "build_time=${BUILD_TIME}" >> $GITHUB_OUTPUT
 
-      - name: Check if tag exists
+      - name: Check tag
         id: tag
         run: |
-          TAG="v${{ steps.ver.outputs.version }}"
+          TAG="v$(cat VERSION)"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag $TAG already exists, skipping"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Will create tag $TAG"
           fi
 
       - name: Create tag
@@ -51,13 +51,74 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin "v${{ steps.ver.outputs.version }}"
+          git tag "v$(cat VERSION)"
+          git push origin "v$(cat VERSION)"
+
+  # ── Docker 镜像 ──────────────────────────────
+  docker:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+            type=ref,event=tag
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            COMMIT_SHA=${{ needs.version.outputs.commit }}
+            BUILD_TIME=${{ needs.version.outputs.build_time }}
+          cache-from: |
+            type=gha,scope=buildkit
+            type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:buildcache
+          cache-to: |
+            type=gha,mode=max,scope=buildkit
+            type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd
+
+  # ── 二进制发版 ──────────────────────────────
+  binary:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
 
       - name: Build binaries
         run: |
-          V="${{ steps.ver.outputs.version }}"
-          LDFLAGS="-s -w -X 'main.version=${V}' -X 'main.commitSHA=${{ steps.ver.outputs.commit }}' -X 'main.buildTime=${{ steps.ver.outputs.build_time }}'"
+          V="${{ needs.version.outputs.version }}"
+          LDFLAGS="-s -w -X 'main.version=${V}' -X 'main.commitSHA=${{ needs.version.outputs.commit }}' -X 'main.buildTime=${{ needs.version.outputs.build_time }}'"
           mkdir -p dist
 
           for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
@@ -77,7 +138,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.ver.outputs.version }}
-          name: TideFlow v${{ steps.ver.outputs.version }}
+          tag_name: v${{ needs.version.outputs.version }}
+          name: TideFlow v${{ needs.version.outputs.version }}
           files: dist/*
           generate_release_notes: true
