@@ -534,6 +534,13 @@ func (e *Engine) fill() {
 	e.mu.Lock()
 	var available []storage.SourceRecord
 	var cooldownIDs []int
+
+	// Build set of currently downloading source IDs
+	busySet := make(map[int]bool)
+	for _, sid := range e.TaskSource {
+		busySet[sid] = true
+	}
+
 	for _, s := range sources {
 		if ent, ok := e.failureTracker[s.ID]; ok {
 			if now.Sub(ent.ts) < cooldownSecs(ent.failures) {
@@ -560,11 +567,36 @@ func (e *Engine) fill() {
 		need = len(available)
 	}
 
-	// shuffle and pick
-	rand.Shuffle(len(available), func(i, j int) {
-		available[i], available[j] = available[j], available[i]
-	})
-	pick := available[:need]
+	// Split into idle (not downloading) and busy (already downloading).
+	// Prefer idle sources to spread load across all available sources.
+	var idle, busy []storage.SourceRecord
+	for _, s := range available {
+		if busySet[s.ID] {
+			busy = append(busy, s)
+		} else {
+			idle = append(idle, s)
+		}
+	}
+
+	// Shuffle both groups independently
+	rand.Shuffle(len(idle), func(i, j int) { idle[i], idle[j] = idle[j], idle[i] })
+	rand.Shuffle(len(busy), func(i, j int) { busy[i], busy[j] = busy[j], busy[i] })
+
+	// Pick idle first, then busy to fill remaining slots
+	pick := make([]storage.SourceRecord, 0, need)
+	if len(idle) > 0 {
+		pick = append(pick, idle...)
+		if len(pick) > need {
+			pick = pick[:need]
+		}
+	}
+	if len(pick) < need && len(busy) > 0 {
+		rem := need - len(pick)
+		if rem > len(busy) {
+			rem = len(busy)
+		}
+		pick = append(pick, busy[:rem]...)
+	}
 
 	speed := e.getSetting("default_max_speed")
 	if speed == "0" {
