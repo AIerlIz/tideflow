@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -9,33 +8,32 @@ import (
 
 	"tideflow/internal/enforcer"
 	"tideflow/internal/models"
+	"tideflow/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 )
 
 // SourcesHandler groups source-related HTTP handlers.
 type SourcesHandler struct {
-	DB     *sql.DB
+	Store  *storage.Store
 	Engine *enforcer.Engine
 }
 
 // ListSources returns all download sources with runtime status.
 func (h *SourcesHandler) ListSources(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.Query("SELECT id, name, url, source_type, enabled, created_at, updated_at FROM download_sources ORDER BY id")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
+	sources := h.Store.ListSources()
 
 	var result []models.SourceResponse
-	for rows.Next() {
-		var s models.DownloadSource
-		if err := rows.Scan(&s.ID, &s.Name, &s.URL, &s.SourceType, &s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		resp := models.SourceResponse{DownloadSource: s}
+	for _, s := range sources {
+		resp := models.SourceResponse{DownloadSource: models.DownloadSource{
+			ID:         s.ID,
+			Name:       s.Name,
+			URL:        s.URL,
+			SourceType: s.SourceType,
+			Enabled:    s.Enabled,
+			CreatedAt:  s.CreatedAt,
+			UpdatedAt:  s.UpdatedAt,
+		}}
 
 		// Aggregate bytes and check if downloading
 		h.Engine.Mu().RLock()
@@ -107,21 +105,16 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		body.SourceType = "http"
 	}
 
-	res, err := h.DB.Exec(
-		"INSERT INTO download_sources (name, url, source_type, enabled) VALUES (?, ?, ?, ?)",
-		body.Name, body.URL, body.SourceType, body.Enabled,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	rec := h.Store.CreateSource(body.Name, body.URL, body.SourceType, body.Enabled)
+	s := models.DownloadSource{
+		ID:         rec.ID,
+		Name:       rec.Name,
+		URL:        rec.URL,
+		SourceType: rec.SourceType,
+		Enabled:    rec.Enabled,
+		CreatedAt:  rec.CreatedAt,
+		UpdatedAt:  rec.UpdatedAt,
 	}
-	id, _ := res.LastInsertId()
-
-	var s models.DownloadSource
-	h.DB.QueryRow(
-		"SELECT id, name, url, source_type, enabled, created_at, updated_at FROM download_sources WHERE id = ?", id,
-	).Scan(&s.ID, &s.Name, &s.URL, &s.SourceType, &s.Enabled, &s.CreatedAt, &s.UpdatedAt)
-
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -140,47 +133,21 @@ func (h *SourcesHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// check exists
-	var s models.DownloadSource
-	err = h.DB.QueryRow(
-		"SELECT id, name, url, source_type, enabled, created_at, updated_at FROM download_sources WHERE id = ?", sid,
-	).Scan(&s.ID, &s.Name, &s.URL, &s.SourceType, &s.Enabled, &s.CreatedAt, &s.UpdatedAt)
-	if err == sql.ErrNoRows {
+	rec, found := h.Store.UpdateSource(sid, body.Name, body.URL, body.SourceType, body.Enabled)
+	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "源不存在"})
 		return
 	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	if body.Name != nil {
-		s.Name = *body.Name
+	s := models.DownloadSource{
+		ID:         rec.ID,
+		Name:       rec.Name,
+		URL:        rec.URL,
+		SourceType: rec.SourceType,
+		Enabled:    rec.Enabled,
+		CreatedAt:  rec.CreatedAt,
+		UpdatedAt:  rec.UpdatedAt,
 	}
-	if body.URL != nil {
-		s.URL = *body.URL
-	}
-	if body.SourceType != nil {
-		s.SourceType = *body.SourceType
-	}
-	if body.Enabled != nil {
-		s.Enabled = *body.Enabled
-	}
-
-	_, err = h.DB.Exec(
-		"UPDATE download_sources SET name=?, url=?, source_type=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-		s.Name, s.URL, s.SourceType, s.Enabled, sid,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// re-read to get updated timestamp
-	h.DB.QueryRow(
-		"SELECT id, name, url, source_type, enabled, created_at, updated_at FROM download_sources WHERE id = ?", sid,
-	).Scan(&s.ID, &s.Name, &s.URL, &s.SourceType, &s.Enabled, &s.CreatedAt, &s.UpdatedAt)
-
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -193,13 +160,7 @@ func (h *SourcesHandler) DeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.DB.Exec("DELETE FROM download_sources WHERE id = ?", sid)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	if !h.Store.DeleteSource(sid) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "源不存在"})
 		return
 	}

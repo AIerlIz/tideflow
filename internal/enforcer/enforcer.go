@@ -2,7 +2,6 @@ package enforcer
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -13,8 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"tideflow/internal/config"
-	"tideflow/internal/models"
+	"tideflow/internal/storage"
 )
 
 // ---- types ----
@@ -26,8 +24,8 @@ type failureEntry struct {
 
 // Engine manages background bandwidth consumption.
 type Engine struct {
-	db *sql.DB
-	mu sync.RWMutex
+	store *storage.Store
+	mu    sync.RWMutex
 
 	// pause flags (private, accessed via methods)
 	pausedByCap    bool
@@ -59,10 +57,10 @@ type Engine struct {
 	failureTracker map[int]failureEntry
 }
 
-// NewEngine creates an Engine bound to the given database.
-func NewEngine(db *sql.DB) *Engine {
+// NewEngine creates an Engine bound to the given store.
+func NewEngine(store *storage.Store) *Engine {
 	return &Engine{
-		db:             db,
+		store:          store,
 		streamCancel:   make(map[string]context.CancelFunc),
 		StreamBytes:    make(map[string]int64),
 		TaskSource:     make(map[string]int),
@@ -102,60 +100,22 @@ func (e *Engine) FailureCount() int {
 // ---- helpers ----
 
 func (e *Engine) getSetting(key string) string {
-	var v string
-	err := e.db.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&v)
-	if err == sql.ErrNoRows {
-		if d, ok := config.DefaultSettings[key]; ok {
-			return d
-		}
-		return ""
-	}
-	if err != nil {
-		log.Printf("getSetting(%s) DB error: %v, falling back to default", key, err)
-		if d, ok := config.DefaultSettings[key]; ok {
-			return d
-		}
-		return ""
-	}
-	return v
+	return e.store.GetSetting(key)
 }
 
-func (e *Engine) currentRecord() (*models.TrafficRecord, error) {
-	row := e.db.QueryRow("SELECT id, period_start, period_end, period_type, total_bytes, download_count, is_current, created_at FROM traffic_records WHERE is_current = 1")
-	var r models.TrafficRecord
-	err := row.Scan(&r.ID, &r.PeriodStart, &r.PeriodEnd, &r.PeriodType, &r.TotalBytes, &r.DownloadCount, &r.IsCurrent, &r.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &r, nil
+func (e *Engine) currentRecord() *storage.TrafficRecord {
+	return e.store.CurrentRecord()
 }
 
 func (e *Engine) syncTraffic() {
 	e.mu.RLock()
 	tp := e.TrafficThisPeriod
 	e.mu.RUnlock()
-	e.db.Exec("UPDATE traffic_records SET total_bytes = ?, download_count = download_count + 1 WHERE is_current = 1", tp)
+	e.store.SyncTraffic(tp)
 }
 
-func (e *Engine) sources() ([]models.DownloadSource, error) {
-	rows, err := e.db.Query("SELECT id, name, url, source_type, enabled, created_at, updated_at FROM download_sources WHERE enabled = 1")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []models.DownloadSource
-	for rows.Next() {
-		var s models.DownloadSource
-		if err := rows.Scan(&s.ID, &s.Name, &s.URL, &s.SourceType, &s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+func (e *Engine) sources() []storage.SourceRecord {
+	return e.store.ListEnabledSources()
 }
 
 // ---- window / cap checks ----
@@ -194,7 +154,7 @@ func (e *Engine) canDownload() bool {
 		}
 	}
 	if e.getSetting("traffic_cap_enabled") == "true" {
-		rec, _ := e.currentRecord()
+		rec := e.currentRecord()
 		if rec != nil {
 			capStr := e.getSetting("traffic_cap_bytes")
 			cap, _ := strconv.ParseInt(capStr, 10, 64)
@@ -212,7 +172,7 @@ func (e *Engine) canDownload() bool {
 // ---- period management ----
 
 func (e *Engine) initPeriod() {
-	if rec, _ := e.currentRecord(); rec != nil {
+	if rec := e.currentRecord(); rec != nil {
 		return
 	}
 	pt := e.getSetting("traffic_cap_period")
@@ -274,14 +234,68 @@ func (e *Engine) initPeriod() {
 		end = now.Add(24 * time.Hour)
 	}
 
-	e.db.Exec("INSERT INTO traffic_records (period_start, period_end, period_type, total_bytes, download_count, is_current) VALUES (?, ?, ?, 0, 0, 1)",
-		now, end, pt)
+	e.store.CreateRecord(now, end, pt)
 }
 
 func (e *Engine) resetPeriod() {
 	e.syncTraffic()
-	e.db.Exec("UPDATE traffic_records SET is_current = 0, period_end = ? WHERE is_current = 1", time.Now())
-	e.initPeriod()
+
+	now := time.Now()
+	pt := e.getSetting("traffic_cap_period")
+	rh, _ := strconv.Atoi(e.getSetting("traffic_cap_reset_hour"))
+	rd, _ := strconv.Atoi(e.getSetting("traffic_cap_reset_day"))
+	if rd < 1 {
+		rd = 1
+	}
+	if rd > 28 {
+		rd = 28
+	}
+
+	var end time.Time
+	switch pt {
+	case "daily":
+		rst := time.Date(now.Year(), now.Month(), now.Day(), rh, 0, 0, 0, now.Location())
+		if now.Before(rst) {
+			end = rst
+		} else {
+			end = rst.Add(24 * time.Hour)
+		}
+	case "weekly":
+		rw, _ := strconv.Atoi(e.getSetting("traffic_cap_reset_weekday"))
+		if rw < 1 || rw > 7 {
+			rw = 1
+		}
+		var targetWD time.Weekday
+		if rw == 7 {
+			targetWD = time.Sunday
+		} else {
+			targetWD = time.Weekday(rw)
+		}
+		nowWD := now.Weekday()
+		daysSinceTarget := int(nowWD - targetWD)
+		if daysSinceTarget < 0 {
+			daysSinceTarget += 7
+		}
+		resetDay := now.Add(-time.Duration(daysSinceTarget) * 24 * time.Hour)
+		resetDay = time.Date(resetDay.Year(), resetDay.Month(), resetDay.Day(), rh, 0, 0, 0, now.Location())
+		if now.Before(resetDay) {
+			end = resetDay
+		} else {
+			end = resetDay.Add(7 * 24 * time.Hour)
+		}
+	case "monthly":
+		thisM := time.Date(now.Year(), now.Month(), rd, rh, 0, 0, 0, now.Location())
+		if now.Before(thisM) {
+			end = thisM
+		} else {
+			next := now.AddDate(0, 1, 0)
+			end = time.Date(next.Year(), next.Month(), rd, rh, 0, 0, 0, now.Location())
+		}
+	default:
+		end = now.Add(24 * time.Hour)
+	}
+
+	e.store.ResetPeriod(now, now, end, pt)
 
 	e.mu.Lock()
 	e.TrafficThisPeriod = 0
@@ -511,14 +525,14 @@ func (e *Engine) fill() {
 		return
 	}
 
-	sources, err := e.sources()
-	if err != nil || len(sources) == 0 {
+	sources := e.sources()
+	if len(sources) == 0 {
 		return
 	}
 
 	now := time.Now()
 	e.mu.Lock()
-	var available []models.DownloadSource
+	var available []storage.SourceRecord
 	var cooldownIDs []int
 	for _, s := range sources {
 		if ent, ok := e.failureTracker[s.ID]; ok {
@@ -598,8 +612,8 @@ func (e *Engine) Run(ctx context.Context) {
 	log.Println("TideFlow enforcer started")
 	e.initPeriod()
 
-	// Restore traffic count from DB
-	if rec, _ := e.currentRecord(); rec != nil {
+	// Restore traffic count from store
+	if rec := e.currentRecord(); rec != nil {
 		e.mu.Lock()
 		e.TrafficThisPeriod = rec.TotalBytes
 		e.mu.Unlock()
@@ -608,10 +622,6 @@ func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	// Periodic WAL checkpoint to prevent unbounded WAL growth in long-running processes.
-	walTicker := time.NewTicker(5 * time.Minute)
-	defer walTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -619,10 +629,6 @@ func (e *Engine) Run(ctx context.Context) {
 			e.syncTraffic()
 			log.Println("TideFlow enforcer stopped")
 			return
-		case <-walTicker.C:
-			if _, err := e.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
-				log.Printf("WAL checkpoint warning: %v", err)
-			}
 		case <-ticker.C:
 			e.calcSpeed()
 			e.tick()
@@ -696,7 +702,7 @@ func (e *Engine) tick() {
 	e.fill()
 
 	// ---- period reset ----
-	rec, _ := e.currentRecord()
+	rec := e.currentRecord()
 	if rec != nil && time.Now().After(rec.PeriodEnd) {
 		e.StopAll()
 		e.resetPeriod()

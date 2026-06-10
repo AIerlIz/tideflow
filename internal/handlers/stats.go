@@ -1,17 +1,17 @@
 package handlers
 
 import (
-	"database/sql"
 	"net/http"
 	"strconv"
 
 	"tideflow/internal/enforcer"
 	"tideflow/internal/models"
+	"tideflow/internal/storage"
 )
 
 // StatsHandler groups stats-related HTTP handlers.
 type StatsHandler struct {
-	DB     *sql.DB
+	Store  *storage.Store
 	Engine *enforcer.Engine
 }
 
@@ -77,28 +77,17 @@ func (h *StatsHandler) HandleTrafficHistory(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	rows, err := h.DB.Query(
-		"SELECT period_start, period_end, period_type, total_bytes, download_count, is_current FROM traffic_records ORDER BY period_start DESC LIMIT ?",
-		days,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	var result []models.TrafficHistoryItem
-	for rows.Next() {
-		var item models.TrafficHistoryItem
-		var start, end any
-		if err := rows.Scan(&start, &end, &item.Type, &item.Bytes, &item.Count, &item.Current); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	items := h.Store.TrafficHistory(days)
+	result := make([]models.TrafficHistoryItem, len(items))
+	for i, item := range items {
+		result[i] = models.TrafficHistoryItem{
+			Start:   item.Start,
+			End:     item.End,
+			Type:    item.Type,
+			Bytes:   item.Bytes,
+			Count:   item.Count,
+			Current: item.Current,
 		}
-		// Format times as ISO 8601 strings (matching Python's .isoformat())
-		item.Start = formatTime(start)
-		item.End = formatTime(end)
-		result = append(result, item)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

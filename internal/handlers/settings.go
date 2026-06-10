@@ -1,41 +1,22 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"tideflow/internal/config"
+	"tideflow/internal/storage"
 )
 
 // SettingsHandler groups settings-related HTTP handlers.
 type SettingsHandler struct {
-	DB *sql.DB
+	Store *storage.Store
 }
 
 // HandleGetSettings returns all settings merged with defaults.
 func (h *SettingsHandler) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
-	settings := make(map[string]string)
-	for k, v := range config.DefaultSettings {
-		settings[k] = v
-	}
-
-	rows, err := h.DB.Query("SELECT key, value FROM global_settings")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			continue
-		}
-		settings[k] = v
-	}
-
+	settings := h.Store.GetAllSettings()
 	writeJSON(w, http.StatusOK, map[string]interface{}{"settings": settings})
 }
 
@@ -53,37 +34,14 @@ func (h *SettingsHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	tx, err := h.DB.Begin()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "无法开启数据库事务", "success": false})
-		return
-	}
-	defer tx.Rollback()
-
+	// Convert all values to strings
+	kv := make(map[string]string, len(body.Settings))
 	for key, val := range body.Settings {
-		// Accept any JSON type, convert to string for storage
-		value := fmt.Sprintf("%v", val)
-
-		var existing string
-		err := tx.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&existing)
-		if err == sql.ErrNoRows {
-			if _, err = tx.Exec("INSERT INTO global_settings (key, value) VALUES (?, ?)", key, value); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "保存设置失败", "success": false})
-				return
-			}
-		} else if err == nil {
-			if _, err = tx.Exec("UPDATE global_settings SET value = ? WHERE key = ?", value, key); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "保存设置失败", "success": false})
-				return
-			}
-		} else {
-			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "读取设置失败", "success": false})
-			return
-		}
+		kv[key] = fmt.Sprintf("%v", val)
 	}
 
-	if err := tx.Commit(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "提交设置失败", "success": false})
+	if err := h.Store.UpdateSettings(kv); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "保存设置失败", "success": false})
 		return
 	}
 

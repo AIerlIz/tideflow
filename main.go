@@ -15,9 +15,9 @@ import (
 	"strings"
 
 	"tideflow/internal/config"
-	"tideflow/internal/database"
 	"tideflow/internal/enforcer"
 	"tideflow/internal/handlers"
+	"tideflow/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -48,16 +48,14 @@ func init() {
 func main() {
 	config.Init()
 
-	// Database
-	if err := database.Init(); err != nil {
-		log.Fatalf("Database init failed: %v", err)
+	// File-based store
+	store, err := storage.New(config.DataDir)
+	if err != nil {
+		log.Fatalf("Storage init failed: %v", err)
 	}
-	defer database.Close()
-
-	db := database.GetDB()
 
 	// Enforcer engine
-	eng := enforcer.NewEngine(db)
+	eng := enforcer.NewEngine(store)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -65,9 +63,9 @@ func main() {
 
 	// Handlers
 	downloadsH := &handlers.DownloadsHandler{Engine: eng}
-	sourcesH := &handlers.SourcesHandler{DB: db, Engine: eng}
-	statsH := &handlers.StatsHandler{DB: db, Engine: eng}
-	settingsH := &handlers.SettingsHandler{DB: db}
+	sourcesH := &handlers.SourcesHandler{Store: store, Engine: eng}
+	statsH := &handlers.StatsHandler{Store: store, Engine: eng}
+	settingsH := &handlers.SettingsHandler{Store: store}
 
 	// Router
 	r := chi.NewRouter()
