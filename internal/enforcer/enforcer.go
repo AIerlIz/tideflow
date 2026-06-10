@@ -104,7 +104,14 @@ func (e *Engine) FailureCount() int {
 func (e *Engine) getSetting(key string) string {
 	var v string
 	err := e.db.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&v)
+	if err == sql.ErrNoRows {
+		if d, ok := config.DefaultSettings[key]; ok {
+			return d
+		}
+		return ""
+	}
 	if err != nil {
+		log.Printf("getSetting(%s) DB error: %v, falling back to default", key, err)
 		if d, ok := config.DefaultSettings[key]; ok {
 			return d
 		}
@@ -601,6 +608,10 @@ func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	// Periodic WAL checkpoint to prevent unbounded WAL growth in long-running processes.
+	walTicker := time.NewTicker(5 * time.Minute)
+	defer walTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -608,6 +619,10 @@ func (e *Engine) Run(ctx context.Context) {
 			e.syncTraffic()
 			log.Println("TideFlow enforcer stopped")
 			return
+		case <-walTicker.C:
+			if _, err := e.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+				log.Printf("WAL checkpoint warning: %v", err)
+			}
 		case <-ticker.C:
 			e.calcSpeed()
 			e.tick()

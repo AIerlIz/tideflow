@@ -53,17 +53,38 @@ func (h *SettingsHandler) HandleUpdateSettings(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	tx, err := h.DB.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "无法开启数据库事务", "success": false})
+		return
+	}
+	defer tx.Rollback()
+
 	for key, val := range body.Settings {
 		// Accept any JSON type, convert to string for storage
 		value := fmt.Sprintf("%v", val)
 
 		var existing string
-		err := h.DB.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&existing)
+		err := tx.QueryRow("SELECT value FROM global_settings WHERE key = ?", key).Scan(&existing)
 		if err == sql.ErrNoRows {
-			h.DB.Exec("INSERT INTO global_settings (key, value) VALUES (?, ?)", key, value)
+			if _, err = tx.Exec("INSERT INTO global_settings (key, value) VALUES (?, ?)", key, value); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "保存设置失败", "success": false})
+				return
+			}
+		} else if err == nil {
+			if _, err = tx.Exec("UPDATE global_settings SET value = ? WHERE key = ?", value, key); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "保存设置失败", "success": false})
+				return
+			}
 		} else {
-			h.DB.Exec("UPDATE global_settings SET value = ? WHERE key = ?", value, key)
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "读取设置失败", "success": false})
+			return
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"message": "提交设置失败", "success": false})
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"message": "设置已更新", "success": true})
